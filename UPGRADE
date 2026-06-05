@@ -1411,9 +1411,14 @@ def update_boss_patterns(enemies, player, effects):
 
         pattern = random.choice(["shockwave", "shockwave", "shockwave", "summon", "rage"])
         if pattern == "shockwave":
-            radius = 180 + get_chapter(enemy.wave if hasattr(enemy, "wave") else 1) * 20
+            boss_day = get_chapter(enemy.wave if hasattr(enemy, "wave") else 1)
+            # 보스 범위공격은 Day 4 범위를 최대치로 고정한다.
+            # Day 1: 120, Day 2: 140, Day 3: 160, Day 4 이상: 180
+            radius = min(180, 100 + min(boss_day, 4) * 20)
+            # 후반 보스는 범위 대신 피해와 패턴 빈도로 압박한다.
+            damage_bonus = 14 + max(0, boss_day - 4) * 2
             # 바로 피해를 주지 않고, 경고 원을 약 0.8초 보여준 뒤 터지게 한다.
-            effects.append(BossWarningEffect(enemy.x, enemy.y, radius, damage=enemy.damage + 14, warning_frames=54, impact_frames=14))
+            effects.append(BossWarningEffect(enemy.x, enemy.y, radius, damage=enemy.damage + damage_bonus, warning_frames=54, impact_frames=14))
         elif pattern == "summon":
             for _ in range(6 + min(9, get_chapter(enemy.wave if hasattr(enemy, "wave") else 1))):
                 enemies.append(Enemy(max(1, getattr(enemy, "wave", 1))))
