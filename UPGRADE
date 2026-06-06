@@ -1376,13 +1376,16 @@ def remove_dead_enemies(enemies, orbs, items, floating_texts, wave):
 
             # 아이템 드롭: 전체적으로 훨씬 드물게 나오게 조정.
             # 방탄 조끼 강화 보급품(max_hp)은 제거했다.
-            drop_chance = 0.025
-            if enemy.enemy_type == "brute":
-                drop_chance = 0.04
+            day = get_chapter(wave)
+
+            if enemy.enemy_type == "boss":
+                drop_chance = max(0.05, 0.28 - (day - 1) * 0.02)
             elif enemy.enemy_type == "tank":
-                drop_chance = 0.045
-            elif enemy.enemy_type == "boss":
-                drop_chance = 0.28
+                drop_chance = max(0.01, 0.045 - (day - 1) * 0.003)
+            elif enemy.enemy_type == "brute":
+                drop_chance = max(0.01, 0.04 - (day - 1) * 0.003)
+            else:
+                drop_chance = max(0.005, 0.025 - (day - 1) * 0.002)
 
             if random.random() < drop_chance:
                 item_type = random.choices(
