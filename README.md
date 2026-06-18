@@ -5,4 +5,5 @@
 
 3.이윤섭/디자인 및 깃 관리 및 발표 촬영
 
-![Uploading 2026-06-18 15-17-19.gif…]()
+
+<img width="400" height="225" alt="2026-06-18 15-17-19" src="https://github.com/user-attachments/assets/e84a6f26-7d70-4bbf-bde5-dd126c7be62c" />
