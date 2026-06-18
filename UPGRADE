@@ -1,0 +1,2094 @@
+# roguelike_shooter.py
+# Python pygame 기반 로그라이크 자동 슈팅 게임
+# 설치: pip install pygame-ce
+# 실행: python roguelike_shooter.py
+
+import pygame
+import random
+import math
+import sys
+from copy import deepcopy
+
+# -----------------------------
+# 초기 설정
+# -----------------------------
+pygame.init()
+
+WIDTH, HEIGHT = 960, 640
+FPS = 60
+
+WAVES_PER_DAY = 3
+REST_DURATION_MS = 5000
+DAY_END_HEAL_RATIO = 0.30
+DAY_BONUS_EXP_BASE = 140
+
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Roguelike Auto Shooter")
+clock = pygame.time.Clock()
+
+# 색상
+WHITE = (245, 245, 245)
+BLACK = (18, 18, 22)
+GRAY = (70, 70, 78)
+DARK_GRAY = (38, 38, 45)
+GREEN = (80, 220, 120)
+RED = (240, 70, 70)
+YELLOW = (255, 220, 80)
+BLUE = (80, 160, 255)
+PURPLE = (180, 80, 255)
+CYAN = (80, 230, 255)
+ORANGE = (255, 150, 70)
+PINK = (255, 120, 180)
+
+# -----------------------------
+# 한글 폰트 설정
+# -----------------------------
+def get_font(size):
+    """윈도우에서는 맑은 고딕을 우선 사용한다. 없으면 기본 폰트 사용."""
+    candidates = ["malgungothic", "맑은 고딕", "gulim", "arialunicode", "consolas"]
+
+    for name in candidates:
+        font = pygame.font.SysFont(name, size)
+        if font is not None:
+            return font
+
+    return pygame.font.Font(None, size)
+
+
+FONT = get_font(22)
+SMALL_FONT = get_font(18)
+BIG_FONT = get_font(46)
+TITLE_FONT = get_font(58)
+
+# -----------------------------
+# 무기 데이터
+# ranged 무기는 탄창/재장전이 있음
+# melee 무기는 탄창 제한 없이 자동 근접 공격
+# -----------------------------
+WEAPON_DATA = {
+    "gun": {
+        "name": "녹슨 권총",
+        "kind": "ranged",
+        "damage": 24,
+        "cooldown": 360,
+        "bullet_speed": 11,
+        "bullet_radius": 5,
+        "max_ammo": 10,
+        "reload_time": 1250,
+        "color": YELLOW,
+        "pierce": 1,
+        "desc": "좀비 사태 초반에 주운 낡은 생존 권총"
+    },
+    "rifle": {
+        "name": "군용 소총",
+        "kind": "ranged",
+        "damage": 21,
+        "cooldown": 155,
+        "bullet_speed": 14,
+        "bullet_radius": 4,
+        "max_ammo": 28,
+        "reload_time": 1600,
+        "color": ORANGE,
+        "pierce": 1,
+        "desc": "버려진 검문소에서 챙긴 연사형 군용 총기"
+    },
+    "shotgun": {
+        "name": "산탄총",
+        "kind": "ranged",
+        "damage": 36,
+        "cooldown": 620,
+        "bullet_speed": 10,
+        "bullet_radius": 6,
+        "max_ammo": 8,
+        "reload_time": 1900,
+        "color": YELLOW,
+        "pierce": 1,
+        "pellets": 5,
+        "spread": 0.34,
+        "desc": "가까운 좀비 무리에 강한 산탄 무기"
+    },
+    "sniper": {
+        "name": "저격소총",
+        "kind": "ranged",
+        "damage": 85,
+        "cooldown": 1050,
+        "bullet_speed": 20,
+        "bullet_radius": 5,
+        "max_ammo": 5,
+        "reload_time": 2300,
+        "color": CYAN,
+        "pierce": 4,
+        "desc": "느리지만 강력하고 뒤쪽 적까지 관통하는 장거리 총기"
+    },
+    "sword": {
+        "name": "녹슨 마체테",
+        "kind": "melee",
+        "damage": 29,
+        "cooldown": 430,
+        "range": 76,
+        "color": WHITE,
+        "desc": "좀비 사태 초반에 주운 녹슨 생존용 큰 칼"
+    },
+    "axe": {
+        "name": "소방 도끼",
+        "kind": "melee",
+        "damage": 48,
+        "cooldown": 780,
+        "range": 92,
+        "color": ORANGE,
+        "desc": "문도 좀비도 찍어버리는 강력한 근접 무기"
+    },
+    "bat": {
+        "name": "못 박힌 야구방망이",
+        "kind": "melee",
+        "damage": 23,
+        "cooldown": 320,
+        "range": 66,
+        "color": GREEN,
+        "desc": "못을 박아 개조한 빠른 근접 생존 무기"
+    },
+    "chainsaw": {
+        "name": "전기톱",
+        "kind": "melee",
+        "damage": 18,
+        "cooldown": 95,
+        "range": 58,
+        "color": YELLOW,
+        "desc": "Day 3부터 등장하는 초근접 연속 절단 무기"
+    },
+    "flamethrower": {
+        "name": "화염방사기",
+        "kind": "ranged",
+        "damage": 13,
+        "cooldown": 80,
+        "bullet_speed": 8,
+        "bullet_radius": 9,
+        "max_ammo": 70,
+        "reload_time": 2400,
+        "color": ORANGE,
+        "pierce": 2,
+        "desc": "Day 3부터 등장하는 지속 화염 제압 무기"
+    },
+    "minigun": {
+        "name": "중기관총",
+        "kind": "ranged",
+        "damage": 17,
+        "cooldown": 65,
+        "bullet_speed": 15,
+        "bullet_radius": 4,
+        "max_ammo": 95,
+        "reload_time": 2600,
+        "color": WHITE,
+        "pierce": 2,
+        "desc": "Day 3부터 등장하는 초연사 중화기"
+    },
+    "grenade_launcher": {
+        "name": "유탄발사기",
+        "kind": "ranged",
+        "damage": 72,
+        "cooldown": 900,
+        "bullet_speed": 8,
+        "bullet_radius": 9,
+        "max_ammo": 6,
+        "reload_time": 2600,
+        "color": GREEN,
+        "pierce": 1,
+        "explosion_radius": 82,
+        "desc": "Day 3부터 등장하는 폭발 범위 무기"
+    },
+    "laser": {
+        "name": "레이저 절단기",
+        "kind": "ranged",
+        "damage": 220,
+        "cooldown": 1150,
+        "bullet_speed": 0,
+        "bullet_radius": 4,
+        "max_ammo": 999,
+        "reload_time": 0,
+        "unlimited_ammo": True,
+        "color": CYAN,
+        "pierce": 999999,
+        "desc": "Day 5부터 등장하는 고화력 직선 관통 레이저"
+    },
+}
+
+WEAPON_EVOLUTIONS = {
+    # 1~3단계는 현실적인 좀비 아포칼립스 무기,
+    # 4단계부터는 판타지 느낌을 빼고 SF/군용 개조 느낌으로 빠르게 진화한다.
+    "gun": ["녹슨 권총", "권총", "개조 권총", "플라즈마 권총", "가우스 권총", "이온 권총", "오메가 권총", "전설 권총"],
+    "rifle": ["군용 소총", "돌격소총", "전투소총", "플라즈마 소총", "가우스 소총", "노바 소총", "은하 소총", "전설 소총"],
+    "shotgun": ["산탄총", "전술 산탄총", "자동 산탄총", "열압력 산탄총", "플라즈마 산탄총", "입자 분쇄총", "차원 파쇄총", "전설 산탄총"],
+    "sniper": ["저격소총", "대물 저격소총", "특수 저격소총", "레일 저격총", "가우스 저격총", "궤도 저격총", "인과 절단총", "전설 저격소총"],
+    "sword": ["녹슨 마체테", "마체테", "전투 마체테", "전열 마체테", "플라즈마 마체테", "입자 절단검", "차원 절단검", "전설 마체테"],
+    "axe": ["소방 도끼", "강화 소방 도끼", "전투도끼", "전열 도끼", "플라즈마 도끼", "중력 도끼", "궤도 도끼", "전설 도끼"],
+    "bat": ["못 박힌 야구방망이", "스파이크 방망이", "강화 방망이", "전격 방망이", "충격파 방망이", "중력 방망이", "입자 파쇄 방망이", "전설 방망이"],
+    "chainsaw": ["전기톱", "전투 전기톱", "산업용 전기톱", "플라즈마 전기톱", "고주파 전기톱", "입자 절단톱", "차원 절단톱", "전설 전기톱"],
+    "flamethrower": ["화염방사기", "네이팜 방사기", "중화염방사기", "플라즈마 방사기", "태양핵 방사기", "핵융합 방사기", "초고열 방사기", "전설 화염방사기"],
+    "minigun": ["중기관총", "미니건", "개조 미니건", "가우스 미니건", "입자 미니건", "차원 미니건", "무한탄 미니건", "전설 미니건"],
+    "grenade_launcher": ["유탄발사기", "자동 유탄발사기", "중유탄발사기", "플라즈마 유탄포", "입자 유탄포", "중력 붕괴포", "반물질 발사기", "전설 유탄발사기"],
+    "laser": ["레이저 절단기", "레일건", "고출력 레일건", "플라즈마 레일건", "오로라 캐논", "차원 광선포", "우주 소멸광", "전설 레일건"],
+}
+WEAPON_UNLOCK_CHAPTER = {
+    "gun": 1,
+    "rifle": 1,
+    "shotgun": 1,
+    "sniper": 1,
+    "sword": 1,
+    "axe": 1,
+    "bat": 1,
+    "chainsaw": 3,
+    "flamethrower": 3,
+    "minigun": 3,
+    "grenade_launcher": 3,
+    "laser": 5,
+}
+
+
+def get_weapon_evolution_name(weapon_id, weapon_level):
+    """무기 레벨에 맞는 진화 이름을 반환한다. 1레벨부터 1단계씩 진화한다."""
+    names = WEAPON_EVOLUTIONS.get(weapon_id, [])
+    if not names:
+        return None
+    index = min(max(weapon_level - 1, 0), len(names) - 1)
+    return names[index]
+
+
+def is_final_weapon_stage(weapon_id, weapon_level):
+    names = WEAPON_EVOLUTIONS.get(weapon_id, [])
+    return bool(names) and weapon_level >= len(names)
+
+
+def get_final_weapon_level(weapon_id, weapon_level):
+    """최종 진화 무기부터 화면에 표시할 강화 레벨. 최종 무기 도달 시 Lv.1이다."""
+    names = WEAPON_EVOLUTIONS.get(weapon_id, [])
+    if not names or weapon_level < len(names):
+        return None
+    return weapon_level - len(names) + 1
+
+
+def get_weapon_display_name(weapon):
+    final_level = get_final_weapon_level(weapon.id, weapon.level)
+    if final_level is None:
+        return weapon.name
+    return f"{weapon.name} Lv.{final_level}"
+
+
+
+
+# -----------------------------
+# 생존 장비 업그레이드 단계 이름
+# -----------------------------
+SUPPORT_UPGRADE_STAGES = {
+    "ammo_all": [
+        ("탄창 개조", "장전식 원거리 무기 최대 탄약 +6"),
+        ("확장 탄창", "장전식 원거리 무기 최대 탄약 추가 +6"),
+        ("전술 탄창", "장전식 원거리 무기 최대 탄약 추가 +7"),
+        ("드럼 탄창", "장전식 원거리 무기 최대 탄약 추가 +8"),
+        ("군용 대용량 탄창", "장전식 원거리 무기 최대 탄약 추가 +9"),
+        ("자동 급탄 탄창", "장전식 원거리 무기 최대 탄약 추가 +10"),
+    ],
+    "max_hp": [
+        ("방탄 조끼 착용", "최대 체력 +20, 즉시 체력 +25, 받는 피해 3 감소"),
+        ("방탄 조끼 강화", "최대 체력 +20, 즉시 체력 +25, 받는 피해 추가 3 감소"),
+        ("세라믹 플레이트 장착", "최대 체력 +25, 즉시 체력 +30, 받는 피해 추가 3 감소"),
+        ("중장갑 조끼", "최대 체력 +25, 즉시 체력 +30, 받는 피해 추가 3 감소"),
+        ("전술 방탄복", "최대 체력 +30, 즉시 체력 +35, 받는 피해 추가 3 감소"),
+        ("강화 전술 방탄복", "최대 체력 +30, 즉시 체력 +35, 받는 피해 추가 3 감소"),
+    ],
+    "move_speed": [
+        ("군용 부츠 착용", "이동 속도 +0.45"),
+        ("군용 부츠 강화", "이동 속도 추가 +0.45"),
+        ("군용 부츠 특수개조", "이동 속도 추가 +0.50"),
+        ("전술 부츠", "이동 속도 추가 +0.55"),
+        ("기동전 부츠", "이동 속도 추가 +0.60"),
+        ("차세대 전술 부츠", "이동 속도 추가 +0.65"),
+    ],
+    "magnet": [
+        ("구조 신호기 획득", "경험치 구슬/보급품 흡수 범위 +45"),
+        ("구조 신호기 강화", "경험치 구슬/보급품 흡수 범위 추가 +45"),
+        ("고출력 구조 신호기", "경험치 구슬/보급품 흡수 범위 추가 +55"),
+        ("광역 구조 비컨", "경험치 구슬/보급품 흡수 범위 추가 +65"),
+        ("생존자 호출 안테나", "경험치 구슬/보급품 흡수 범위 추가 +75"),
+    ],
+    "freeze_skill": [
+        ("섬광탄 장치 획득", "일정 주기마다 좀비를 1.3초 둔화"),
+        ("섬광탄 장치 강화", "섬광탄 재사용 대기시간 1.2초 감소"),
+        ("고출력 섬광탄 장치", "섬광탄 재사용 대기시간 추가 1.2초 감소"),
+        ("전술 섬광 제어기", "섬광탄 재사용 대기시간 추가 1.2초 감소"),
+        ("광역 섬광 프로토콜", "섬광탄 재사용 대기시간 추가 1.2초 감소"),
+    ],
+    "heal": [
+        ("구급상자 사용", "즉시 체력 +60 회복"),
+        ("대형 구급상자 사용", "즉시 체력 +70 회복"),
+        ("응급 의료 키트 사용", "즉시 체력 +80 회복"),
+        ("군용 의료 팩 사용", "즉시 체력 +90 회복"),
+    ],
+}
+
+
+def get_support_level(player, upgrade_id):
+    return player.support_upgrade_levels.get(upgrade_id, 0)
+
+
+def get_support_stage(upgrade_id, level):
+    stages = SUPPORT_UPGRADE_STAGES.get(upgrade_id, [])
+    if not stages:
+        return None, None
+    index = min(level, len(stages) - 1)
+    return stages[index]
+
+
+def get_support_upgrade_title(player, upgrade_id):
+    title, _ = get_support_stage(upgrade_id, get_support_level(player, upgrade_id))
+    return title
+
+
+def get_support_upgrade_desc(player, upgrade_id):
+    _, desc = get_support_stage(upgrade_id, get_support_level(player, upgrade_id))
+    return desc
+
+
+def get_weapon_upgrade_title(player, weapon_id):
+    """업그레이드 창에 보여줄 무기 선택지 문구를 현재 보유/진화 상태에 맞춰 만든다."""
+    current_weapon = None
+    for weapon in player.weapons:
+        if weapon.id == weapon_id:
+            current_weapon = weapon
+            break
+
+    if current_weapon is None:
+        return f"{get_weapon_evolution_name(weapon_id, 1) or WEAPON_DATA[weapon_id]['name']} 획득"
+
+    current_name = current_weapon.name
+    next_level = current_weapon.level + 1
+    next_name = get_weapon_evolution_name(weapon_id, next_level) or current_name
+
+    if next_name != current_name:
+        return f"{current_name} → {next_name}"
+
+    final_level = get_final_weapon_level(weapon_id, current_weapon.level) or 1
+    return f"{current_name} Lv.{final_level} → Lv.{final_level + 1}"
+
+
+def get_upgrade_description(player, choice):
+    """업그레이드 창 설명을 현재 상태 기준으로 최대한 정확하게 보여준다."""
+    weapon_id = choice.get("weapon_id")
+    if weapon_id:
+        for weapon in player.weapons:
+            if weapon.id == weapon_id:
+                next_name = get_weapon_evolution_name(weapon_id, weapon.level + 1) or weapon.name
+                if next_name != weapon.name:
+                    return f"무기 이름 변경 + 공격력/공속/탄창·사거리 등 대폭 강화"
+                return "최종 단계 무기 강화 레벨 +1. 전설 무기 효과와 능력치가 상승"
+        return WEAPON_DATA[weapon_id]["desc"]
+
+    support_desc = get_support_upgrade_desc(player, choice.get("id"))
+    if support_desc:
+        return support_desc
+
+    return choice["desc"]
+
+
+# -----------------------------
+# 업그레이드 후보
+# -----------------------------
+UPGRADE_POOL = [
+    {"id": "weapon_gun", "weapon_id": "gun", "min_chapter": 1, "title": "녹슨 권총 강화", "desc": "기본 생존 권총을 강화"},
+    {"id": "weapon_rifle", "weapon_id": "rifle", "min_chapter": 1, "title": "군용 소총 획득/강화", "desc": "좀비 무리에 맞서는 연사 무기 추가 또는 강화"},
+    {"id": "weapon_shotgun", "weapon_id": "shotgun", "min_chapter": 1, "title": "산탄총 획득/강화", "desc": "근거리 좀비 무리에 강한 산탄 무기"},
+    {"id": "weapon_sniper", "weapon_id": "sniper", "min_chapter": 1, "title": "저격소총 획득/강화", "desc": "느리지만 강력한 관통 총기"},
+    {"id": "weapon_sword", "weapon_id": "sword", "min_chapter": 1, "title": "마체테 획득/강화", "desc": "재장전 없는 생존 근접 무기 추가 또는 강화"},
+    {"id": "weapon_axe", "weapon_id": "axe", "min_chapter": 1, "title": "소방 도끼 획득/강화", "desc": "넓고 강한 좀비 제압 무기 추가 또는 강화"},
+    {"id": "weapon_bat", "weapon_id": "bat", "min_chapter": 1, "title": "못 박힌 야구방망이 획득/강화", "desc": "짧은 쿨타임의 개조 근접 무기 추가 또는 강화"},
+    {"id": "weapon_chainsaw", "weapon_id": "chainsaw", "min_chapter": 3, "title": "전기톱 획득/강화", "desc": "Day 3부터 나오는 초근접 연속 절단 무기"},
+    {"id": "weapon_flamethrower", "weapon_id": "flamethrower", "min_chapter": 3, "title": "화염방사기 획득/강화", "desc": "Day 3부터 나오는 지속 화염 무기"},
+    {"id": "weapon_minigun", "weapon_id": "minigun", "min_chapter": 3, "title": "중기관총 획득/강화", "desc": "Day 3부터 나오는 초연사 중화기"},
+    {"id": "weapon_grenade_launcher", "weapon_id": "grenade_launcher", "min_chapter": 3, "title": "유탄발사기 획득/강화", "desc": "Day 3부터 나오는 폭발 범위 무기"},
+    {"id": "weapon_laser", "weapon_id": "laser", "min_chapter": 5, "title": "레이저 절단기 획득/강화", "desc": "Day 5부터 나오는 직선 관통 최종병기"},
+    {"id": "damage_all", "title": "탄약 개조", "desc": "원거리 무기 공격력 +6. 총기와 화염/유탄 계열만 강화"},
+    {"id": "melee_damage", "title": "근접 무기 연마", "desc": "근접 무기 공격력 +8. 마체테/도끼/방망이/전기톱만 강화"},
+    {"id": "cooldown_all", "title": "생존자 전투 훈련", "desc": "모든 무기 공격 간격 12% 감소"},
+    {"id": "ammo_all", "title": "탄창 개조", "desc": "장전식 원거리 무기 최대 탄약 +6"},
+    {"id": "reload_all", "title": "탄창 교체 훈련", "desc": "장전식 원거리 무기 재장전 시간 25% 감소"},
+    {"id": "projectile_speed", "title": "고압 탄약", "desc": "장전식 원거리 무기 탄속 +2"},
+    {"id": "max_hp", "title": "방탄 조끼 착용", "desc": "최대 체력 +20, 즉시 체력 +25, 받는 피해 3 감소"},
+    {"id": "move_speed", "title": "군용 부츠 착용", "desc": "이동 속도 +0.45. 좀비 사이를 더 빠르게 빠져나감"},
+    {"id": "magnet", "title": "구조 신호기 강화", "desc": "경험치 구슬/보급품 흡수 범위 +45"},
+    {"id": "freeze_skill", "title": "섬광탄 장치 개조", "desc": "일정 주기마다 좀비를 1.3초 둔화. 재사용 대기시간 감소"},
+    {"id": "heal", "title": "구급상자 사용", "desc": "즉시 체력 +60 회복"},
+]
+
+
+
+# -----------------------------
+# 유틸 함수
+# -----------------------------
+def clamp(value, min_value, max_value):
+    return max(min_value, min(max_value, value))
+
+
+def distance(ax, ay, bx, by):
+    return math.hypot(ax - bx, ay - by)
+
+
+def draw_text(surface, text, font, color, x, y, center=False):
+    image = font.render(text, True, color)
+    rect = image.get_rect()
+
+    if center:
+        rect.center = (x, y)
+    else:
+        rect.topleft = (x, y)
+
+    surface.blit(image, rect)
+    return rect
+
+
+def get_nearest_enemy(x, y, enemies):
+    if not enemies:
+        return None
+    return min(enemies, key=lambda e: distance(x, y, e.x, e.y))
+
+
+def get_line_end_from_player(x, y, angle):
+    # 화면 밖까지 충분히 길게 뻗는 레이저 끝점
+    length = math.hypot(WIDTH, HEIGHT) + 120
+    return x + math.cos(angle) * length, y + math.sin(angle) * length
+
+
+def distance_point_to_segment(px, py, ax, ay, bx, by):
+    # 점과 선분 사이의 최단거리 계산. 레이저 판정에 사용.
+    abx = bx - ax
+    aby = by - ay
+    ab_len_sq = abx * abx + aby * aby
+    if ab_len_sq == 0:
+        return distance(px, py, ax, ay)
+
+    t = ((px - ax) * abx + (py - ay) * aby) / ab_len_sq
+    t = clamp(t, 0, 1)
+    closest_x = ax + abx * t
+    closest_y = ay + aby * t
+    return distance(px, py, closest_x, closest_y)
+
+
+# -----------------------------
+# 클래스 정의
+# -----------------------------
+class Weapon:
+    def __init__(self, weapon_id):
+        data = deepcopy(WEAPON_DATA[weapon_id])
+        self.id = weapon_id
+        self.name = data["name"]
+        self.kind = data["kind"]
+        self.level = 1
+        self.damage = data["damage"]
+        self.cooldown = data["cooldown"]
+        self.color = data["color"]
+        self.last_used = 0
+
+        if self.kind == "ranged":
+            self.bullet_speed = data["bullet_speed"]
+            self.bullet_radius = data["bullet_radius"]
+            self.unlimited_ammo = data.get("unlimited_ammo", False)
+            self.max_ammo = data["max_ammo"]
+            self.ammo = self.max_ammo
+            self.reload_time = data["reload_time"]
+            self.reload_end_time = 0
+            self.pierce = data["pierce"]
+            self.pellets = data.get("pellets", 1)
+            self.spread = data.get("spread", 0)
+            self.explosion_radius = data.get("explosion_radius", 0)
+        else:
+            self.range = data["range"]
+
+    def upgrade(self):
+        old_name = self.name
+        old_final_level = get_final_weapon_level(self.id, self.level)
+        self.level += 1
+
+        # 무기 레벨이 1 오를 때마다 이름도 1단계 진화한다.
+        # 최종 이름에 도달한 뒤에는 이름은 유지되고 최종 강화 Lv만 오른다.
+        evolved_name = get_weapon_evolution_name(self.id, self.level)
+        if evolved_name:
+            self.name = evolved_name
+
+        # 눈으로 체감될 만큼 강하게 상승시킨다.
+        self.damage = int(self.damage * 1.28) + 6
+        self.cooldown = max(45, int(self.cooldown * 0.86))
+
+        if self.kind == "ranged":
+            if self.unlimited_ammo:
+                # 레이저는 투사체가 아니라 즉시 뻗는 빔이라 탄속/장전 개념이 없다.
+                self.pierce = 999999
+                self.damage = int(self.damage * 1.12)
+            else:
+                self.max_ammo += 5
+                self.ammo = self.max_ammo
+                self.reload_time = max(300, int(self.reload_time * 0.86))
+                self.bullet_speed += 1
+                self.bullet_radius = min(13, self.bullet_radius + 1)
+                self.pierce += 1
+                if self.id == "sniper":
+                    self.pierce += 1
+                    self.damage = int(self.damage * 1.08)
+
+                if hasattr(self, "pellets") and self.pellets > 1 and self.level % 2 == 0:
+                    self.pellets += 1
+                    self.spread = min(0.55, self.spread + 0.03)
+                if hasattr(self, "explosion_radius") and self.explosion_radius > 0:
+                    self.explosion_radius += 14
+        else:
+            self.range += 9
+
+        # 전설 무기에 처음 도달하는 순간, 무기별 고유 전설 효과를 1회 적용한다.
+        if old_final_level is None and get_final_weapon_level(self.id, self.level) is not None:
+            self.apply_legendary_bonus_once()
+
+        if old_name != self.name:
+            return f"{old_name} → {self.name}"
+
+        new_final_level = get_final_weapon_level(self.id, self.level)
+        if new_final_level is not None:
+            before = old_final_level or 1
+            return f"{self.name} Lv.{before} → Lv.{new_final_level}"
+
+        return self.name
+
+    def apply_legendary_bonus_once(self):
+        """전설 단계에 처음 도달했을 때만 무기별 고유 효과를 적용한다."""
+        if self.kind == "ranged":
+            if self.id == "gun":
+                # 전설 권총: 탄창 3배, 재장전 80% 감소
+                self.max_ammo *= 3
+                self.ammo = self.max_ammo
+                self.reload_time = max(120, int(self.reload_time * 0.20))
+            elif self.id == "rifle":
+                # 전설 소총: 탄창 2배, 관통 +1
+                self.max_ammo *= 2
+                self.ammo = self.max_ammo
+                self.pierce += 1
+            elif self.id == "shotgun":
+                # 전설 산탄총: 산탄 수 증가, 재장전 70% 감소
+                self.pellets = max(getattr(self, "pellets", 1) + 3, 9)
+                self.spread = min(0.62, getattr(self, "spread", 0.34) + 0.08)
+                self.reload_time = max(180, int(self.reload_time * 0.30))
+                self.max_ammo += 10
+                self.ammo = self.max_ammo
+            elif self.id == "sniper":
+                # 전설 저격소총: 관통 10, 보스 추가 피해는 충돌 처리에서 적용
+                self.pierce = max(self.pierce, 10)
+                self.reload_time = max(450, int(self.reload_time * 0.65))
+            elif self.id == "minigun":
+                # 전설 중기관총: 초대형 탄창, 재장전 거의 없음
+                self.max_ammo = max(self.max_ammo * 3, 320)
+                self.ammo = self.max_ammo
+                self.reload_time = max(160, int(self.reload_time * 0.15))
+            elif self.id == "grenade_launcher":
+                # 전설 유탄발사기: 폭발 범위 2배
+                self.explosion_radius = max(getattr(self, "explosion_radius", 0) * 2, 180)
+                self.max_ammo += 6
+                self.ammo = self.max_ammo
+            elif self.id == "flamethrower":
+                # 전설 화염방사기: 화염 지속/관통 느낌 강화
+                self.pierce += 3
+                self.max_ammo += 80
+                self.ammo = self.max_ammo
+                self.cooldown = max(35, int(self.cooldown * 0.75))
+            elif self.id == "laser":
+                # 전설 레이저: 무한 탄약 + 무한 관통
+                self.unlimited_ammo = True
+                self.pierce = 999999
+                self.reload_time = 0
+                self.max_ammo = 999999
+                self.ammo = self.max_ammo
+        else:
+            # 전설 근접 무기: 사거리와 피해 체감 상승
+            self.range += 22
+            self.damage = int(self.damage * 1.25)
+
+    def ready_to_fire(self, now):
+        return now - self.last_used >= self.cooldown
+
+    def is_reloading(self, now):
+        return self.kind == "ranged" and not self.unlimited_ammo and self.reload_end_time > now
+
+    def start_reload(self, now):
+        if self.kind == "ranged" and not self.unlimited_ammo and self.reload_end_time <= now:
+            self.reload_end_time = now + self.reload_time
+
+    def finish_reload_if_needed(self, now):
+        if self.kind == "ranged" and not self.unlimited_ammo and self.reload_end_time > 0 and now >= self.reload_end_time:
+            self.ammo = self.max_ammo
+            self.reload_end_time = 0
+
+
+class Player:
+    def __init__(self):
+        self.x = WIDTH // 2
+        self.y = HEIGHT // 2
+        self.radius = 18
+        self.speed = 4.8
+        self.hp = 120
+        self.max_hp = 120
+        self.armor = 0
+        self.armor_level = 0
+        self.level = 1
+        self.exp = 0
+        self.exp_needed = 75
+        self.magnet_range = 85
+        self.last_hit = 0
+        self.hit_delay = 650
+        self.weapons = [Weapon("gun")]
+        self.freeze_skill = False
+        self.freeze_skill_last = 0
+        self.freeze_skill_delay = 9000
+        self.support_upgrade_levels = {
+            "ammo_all": 0,
+            "max_hp": 0,
+            "move_speed": 0,
+            "magnet": 0,
+            "freeze_skill": 0,
+            "heal": 0,
+        }
+
+        # 아이템 효과 시간
+        self.magnet_boost_until = 0
+        self.freeze_until = 0
+        self.evolution_flash_until = 0
+        self.day_reward_count = 0
+
+    def move(self, keys):
+        dx = 0
+        dy = 0
+
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            dy -= 1
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            dy += 1
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            dx -= 1
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            dx += 1
+
+        length = math.hypot(dx, dy)
+        if length > 0:
+            dx /= length
+            dy /= length
+
+        self.x += dx * self.speed
+        self.y += dy * self.speed
+        self.x = clamp(self.x, self.radius, WIDTH - self.radius)
+        self.y = clamp(self.y, self.radius, HEIGHT - self.radius)
+
+    def take_damage(self, damage):
+        now = pygame.time.get_ticks()
+
+        if now - self.last_hit >= self.hit_delay:
+            # 방탄 조끼: 강화할수록 모든 접촉 피해를 직접 줄인다.
+            # 최소 1 피해는 받게 해서 완전 무적이 되지는 않게 한다.
+            final_damage = max(1, damage - self.armor)
+            self.hp = max(0, self.hp - final_damage)
+            self.last_hit = now
+
+    def gain_exp(self, amount):
+        self.exp += amount
+        leveled = False
+
+        while self.exp >= self.exp_needed:
+            self.exp -= self.exp_needed
+            self.level += 1
+            self.exp_needed = int(self.exp_needed * 1.24 + 18)
+            leveled = True
+
+        return leveled
+
+    def add_or_upgrade_weapon(self, weapon_id):
+        for weapon in self.weapons:
+            if weapon.id == weapon_id:
+                upgrade_result = weapon.upgrade()
+                return f"{upgrade_result} 강화"
+
+        self.weapons.append(Weapon(weapon_id))
+        return f"{get_weapon_evolution_name(weapon_id, 1) or WEAPON_DATA[weapon_id]['name']} 획득"
+
+    def apply_upgrade(self, upgrade_id):
+        for choice in UPGRADE_POOL:
+            if choice.get("id") == upgrade_id and "weapon_id" in choice:
+                result = self.add_or_upgrade_weapon(choice["weapon_id"])
+                self.evolution_flash_until = pygame.time.get_ticks() + 1200
+                return result
+
+        if upgrade_id == "damage_all":
+            for weapon in self.weapons:
+                if weapon.kind == "ranged":
+                    weapon.damage += 6
+            return "원거리 무기 공격력 증가"
+
+        if upgrade_id == "melee_damage":
+            for weapon in self.weapons:
+                if weapon.kind == "melee":
+                    weapon.damage += 8
+            return "근접 무기 공격력 증가"
+
+        if upgrade_id == "cooldown_all":
+            for weapon in self.weapons:
+                weapon.cooldown = max(50, int(weapon.cooldown * 0.88))
+            return "생존 전투 속도 증가"
+
+        if upgrade_id == "ammo_all":
+            level = self.support_upgrade_levels.get("ammo_all", 0)
+            bonus = 6 + min(level, 4)
+            for weapon in self.weapons:
+                if weapon.kind == "ranged" and not weapon.unlimited_ammo:
+                    weapon.max_ammo += bonus
+                    weapon.ammo = weapon.max_ammo
+            title = get_support_upgrade_title(self, "ammo_all")
+            self.support_upgrade_levels["ammo_all"] = level + 1
+            return f"{title}: 탄창 +{bonus}"
+
+        if upgrade_id == "reload_all":
+            for weapon in self.weapons:
+                if weapon.kind == "ranged" and not weapon.unlimited_ammo:
+                    weapon.reload_time = max(350, int(weapon.reload_time * 0.75))
+            return "탄창 교체 속도 증가"
+
+        if upgrade_id == "projectile_speed":
+            for weapon in self.weapons:
+                if weapon.kind == "ranged" and not weapon.unlimited_ammo:
+                    weapon.bullet_speed += 2
+            return "고압 탄약 장착"
+
+        if upgrade_id == "max_hp":
+            level = self.support_upgrade_levels.get("max_hp", 0)
+            title = get_support_upgrade_title(self, "max_hp")
+            hp_bonus = 20 + min(level // 2, 3) * 5
+            heal_bonus = 25 + min(level // 2, 3) * 5
+            self.armor_level += 1
+            armor_bonus = 3 + (1 if level >= 3 else 0)
+            self.armor += armor_bonus
+            self.max_hp += hp_bonus
+            self.hp = min(self.max_hp, self.hp + heal_bonus)
+            self.support_upgrade_levels["max_hp"] = level + 1
+            return f"{title}: 최대체력 +{hp_bonus}, 피해 감소 +{armor_bonus} / 현재 {self.armor}"
+
+        if upgrade_id == "move_speed":
+            level = self.support_upgrade_levels.get("move_speed", 0)
+            title = get_support_upgrade_title(self, "move_speed")
+            speed_bonus = 0.45 + min(level, 4) * 0.05
+            self.speed += speed_bonus
+            self.support_upgrade_levels["move_speed"] = level + 1
+            return f"{title}: 이동속도 +{speed_bonus:.2f}"
+
+        if upgrade_id == "magnet":
+            level = self.support_upgrade_levels.get("magnet", 0)
+            title = get_support_upgrade_title(self, "magnet")
+            bonus = 45 + min(level, 4) * 10
+            self.magnet_range += bonus
+            self.support_upgrade_levels["magnet"] = level + 1
+            return f"{title}: 흡수 범위 +{bonus}"
+
+        if upgrade_id == "freeze_skill":
+            level = self.support_upgrade_levels.get("freeze_skill", 0)
+            title = get_support_upgrade_title(self, "freeze_skill")
+            self.freeze_skill = True
+            self.freeze_skill_delay = max(4500, self.freeze_skill_delay - 1200)
+            self.support_upgrade_levels["freeze_skill"] = level + 1
+            return f"{title}: 재사용 대기시간 감소"
+
+        if upgrade_id == "heal":
+            self.hp = min(self.max_hp, self.hp + 60)
+            return "구급상자로 체력 회복"
+
+        return "업그레이드 적용"
+
+    def draw(self, surface):
+        pygame.draw.circle(surface, BLUE,(int(self.x), int(self.y)), self.radius)
+
+        # 무기 진화/최종 강화 직후 눈에 보이는 에너지 이펙트
+        now = pygame.time.get_ticks()
+        if now < self.evolution_flash_until:
+            pulse = 4 + ((self.evolution_flash_until - now) // 80) % 8
+            pygame.draw.circle(surface, CYAN, (int(self.x), int(self.y)), self.radius + 10 + pulse, 3)
+            pygame.draw.circle(surface, YELLOW, (int(self.x), int(self.y)), self.radius + 22 + pulse, 1)
+
+        # 피격 직후 짧게 테두리 표시
+        if now - self.last_hit < 160:
+            pygame.draw.circle(surface, RED, (int(self.x), int(self.y)), self.radius + 5, 2)
+
+
+class Bullet:
+    def __init__(self, x, y, vx, vy, damage, radius, color, pierce, weapon_name, explosion_radius=0):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.damage = damage
+        self.radius = radius
+        self.color = color
+        self.pierce = pierce
+        self.weapon_name = weapon_name
+        self.explosion_radius = explosion_radius
+        self.hit_enemies = set()
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+
+    def offscreen(self):
+        return self.x < -40 or self.x > WIDTH + 40 or self.y < -40 or self.y > HEIGHT + 40
+
+    def draw(self, surface):
+        if self.weapon_name == "수리검":
+            pygame.draw.circle(surface, WHITE, (int(self.x), int(self.y)), self.radius, 1)
+        else:
+            pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)
+
+class Enemy:
+    next_id = 1
+
+    def __init__(self, wave, forced_type=None):
+        self.id = Enemy.next_id
+        self.wave = wave
+        Enemy.next_id += 1
+
+        enemy_type = forced_type or random.choices(
+            ["normal", "runner", "brute", "tank"],
+            # 강한 적은 더 희귀하게, 대신 훨씬 위협적인 정예 개체로 만든다.
+            weights=[48, 32, 7, 13],
+            k=1
+        )[0]
+
+        self.enemy_type = enemy_type
+        self.spawn_at_edge()
+
+        # 전체 난이도 상승: Day가 오를수록 체력/속도/피해가 더 빠르게 증가한다.
+        day = get_chapter(wave)
+        # 난이도 살짝 완화: 기존보다 체력 증가폭을 조금 낮춘다.
+        scale = 1 + wave * 0.17 + day * 0.065 + max(0, 4 - day) * 0.07
+
+        # DAY가 올라갈수록 적 하나당 경험치가 확실히 증가한다.
+        # 빠른 적은 낮게, 일반/강한/탱커/보스 순서로 보상을 크게 다르게 설정.
+        exp_scale = 1 + max(0, day - 1) * 0.55 + max(0, wave - 1) * 0.12
+
+        if enemy_type == "runner":
+            self.name = "날쌘 적"
+            self.radius = 12
+            self.max_hp = int((29 + wave * 7) * scale)
+            self.speed = 2.75 + wave * 0.085 + day * 0.03
+            self.damage = 10 + wave // 4 + day // 2
+            self.color = YELLOW
+            base_exp = 28
+        elif enemy_type == "brute":
+            self.name = "강한 적"
+            self.radius = 26
+            # 잘 안 나오는 대신 탱커보다 전투 위협도가 높다.
+            self.max_hp = int((145 + wave * 25) * scale)
+            self.speed = 1.50 + wave * 0.065 + day * 0.03
+            self.damage = 32 + wave + day
+            self.color = ORANGE
+            # 탱커보다 더 많은 경험치를 준다.
+            base_exp = 180
+        elif enemy_type == "tank":
+            self.name = "샌드백"
+            self.radius = 28
+            self.max_hp = int((165 + wave * 22) * scale)
+            self.speed = 0.74 + wave * 0.026 + day * 0.012
+            self.damage = 14 + wave // 4 + day // 2
+            self.color = GREEN
+            base_exp = 135
+        elif enemy_type == "boss":
+            self.name = "보스"
+            self.radius = 50
+            # 보스전이 확실한 벽처럼 느껴지도록 체력을 크게 올린다.
+            self.max_hp = int((1750 + wave * 420) * (1 + day * 0.16))
+            self.speed = 1.22 + wave * 0.036 + day * 0.028
+            self.damage = 40 + wave + day * 2
+            self.color = PURPLE
+            # 보스 처치 보상은 플레이어가 확실히 체감되도록 크게 올린다.
+            base_exp = 1800
+        else:
+            self.name = "일반 적"
+            self.radius = 18
+            self.max_hp = int((60 + wave * 11) * scale)
+            self.speed = 1.55 + wave * 0.048 + day * 0.018
+            self.damage = 14 + wave // 4 + day // 2
+            self.color = RED
+            base_exp = 55
+
+        # 중후반 난이도 완화: 전설 무기 파워를 체감할 수 있게 Day 4 이후 성장폭을 낮춘다.
+        if day >= 4:
+            self.max_hp = int(self.max_hp * 0.90)
+        if day >= 5:
+            self.damage = max(1, int(self.damage * 0.90))
+        if day >= 6:
+            self.max_hp = int(self.max_hp * 0.92)
+            self.speed *= 0.95
+        if enemy_type == "boss" and day >= 6:
+            # 중후반 전체 난이도 완화는 유지하되, 보스만은 너무 약해지지 않게 보정한다.
+            self.max_hp = int(self.max_hp * 1.08)
+            self.damage = max(1, int(self.damage * 0.98))
+        if enemy_type == "tank" and day >= 4:
+            self.max_hp = int(self.max_hp * 0.90)
+
+        self.exp_amount = int((base_exp + day * 18 + wave * 6) * exp_scale)
+        if day >= 4:
+            self.exp_amount = int(self.exp_amount * 1.12)
+
+        # 보스는 Day가 오를수록 추가 경험치를 더 많이 준다.
+        # 보스를 잡았을 때 레벨업이 확실히 느껴지도록 일반 적과 별도로 보정한다.
+        if enemy_type == "boss":
+            self.exp_amount = int(self.exp_amount * (1.65 + day * 0.18))
+
+        self.hp = self.max_hp
+
+    def spawn_at_edge(self):
+        side = random.randint(0, 3)
+        margin = 50
+
+        if side == 0:
+            self.x = -margin
+            self.y = random.randint(0, HEIGHT)
+        elif side == 1:
+            self.x = WIDTH + margin
+            self.y = random.randint(0, HEIGHT)
+        elif side == 2:
+            self.x = random.randint(0, WIDTH)
+            self.y = -margin
+        else:
+            self.x = random.randint(0, WIDTH)
+            self.y = HEIGHT + margin
+
+    def update(self, player, frozen=False):
+        speed = self.speed * (0.18 if frozen else 1.0)
+        angle = math.atan2(player.y - self.y, player.x - self.x)
+        self.x += math.cos(angle) * speed
+        self.y += math.sin(angle) * speed
+
+    def take_damage(self, damage):
+        self.hp -= damage
+
+    def draw(self, surface):
+        pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius)
+        pygame.draw.circle(surface, WHITE, (int(self.x), int(self.y)), self.radius, 2)
+
+        if self.enemy_type == "runner":
+            pygame.draw.circle(surface, BLACK, (int(self.x), int(self.y)), max(3, self.radius // 3))
+        elif self.enemy_type == "tank":
+            pygame.draw.rect(surface, BLACK, (int(self.x - 8), int(self.y - 8), 16, 16))
+        elif self.enemy_type == "boss":
+            draw_text(surface, "BOSS", SMALL_FONT, WHITE, int(self.x - 24), int(self.y - 8))
+
+        # 체력바
+        ratio = clamp(self.hp / self.max_hp, 0, 1)
+        bar_w = max(42, self.radius * 2)
+        bar_h = 6
+        bx = int(self.x - bar_w / 2)
+        by = int(self.y - self.radius - 14)
+        pygame.draw.rect(surface, GRAY, (bx, by, bar_w, bar_h))
+        pygame.draw.rect(surface, GREEN, (bx, by, int(bar_w * ratio), bar_h))
+
+
+class ExpOrb:
+    def __init__(self, x, y, amount, enemy_type="normal"):
+        self.x = x
+        self.y = y
+        self.amount = amount
+        self.enemy_type = enemy_type
+        self.pulse = random.random() * math.pi * 2
+
+        # 적 종류별 경험치 구슬 외형을 다시 정리한다.
+        # 경험치 가치가 높을수록 더 크고, 테두리/문양이 뚜렷하게 보인다.
+        styles = {
+            "runner": {"radius": 5, "color": YELLOW, "outline": DARK_GRAY, "mark": ">"},
+            "normal": {"radius": 7, "color": GREEN, "outline": WHITE, "mark": ""},
+            "tank": {"radius": 10, "color": CYAN, "outline": GREEN, "mark": "■"},
+            "brute": {"radius": 13, "color": ORANGE, "outline": RED, "mark": "!"},
+            "boss": {"radius": 17, "color": PURPLE, "outline": YELLOW, "mark": "★"},
+        }
+        style = styles.get(enemy_type, styles["normal"])
+        self.radius = style["radius"]
+        self.color = style["color"]
+        self.outline = style["outline"]
+        self.mark = style["mark"]
+
+    def update(self, player):
+        now = pygame.time.get_ticks()
+        attract_range = player.magnet_range
+
+        if now < player.magnet_boost_until:
+            attract_range = 2000
+
+        d = distance(self.x, self.y, player.x, player.y)
+        if d < attract_range and d > 0:
+            speed = 4.5 + (attract_range - min(d, attract_range)) / 80
+            self.x += (player.x - self.x) / d * speed
+            self.y += (player.y - self.y) / d * speed
+
+    def draw(self, surface):
+        x, y = int(self.x), int(self.y)
+        now = pygame.time.get_ticks()
+        pulse_size = 1 if int(now / 220 + self.pulse) % 2 == 0 else 0
+
+        pygame.draw.circle(surface, self.color, (x, y), self.radius + pulse_size)
+        pygame.draw.circle(surface, self.outline, (x, y), self.radius + pulse_size, 2)
+
+        if self.enemy_type == "runner":
+            pygame.draw.line(surface, self.outline, (x - 3, y), (x + 4, y), 2)
+        elif self.enemy_type == "normal":
+            pygame.draw.circle(surface, WHITE, (x, y), 2)
+        elif self.enemy_type == "tank":
+            pygame.draw.rect(surface, self.outline, (x - 5, y - 5, 10, 10), 2)
+        elif self.enemy_type == "brute":
+            # 강한 적 구슬은 탱커보다 가치가 높다는 걸 눈으로 알 수 있게 붉은 정예 문양을 넣는다.
+            pygame.draw.circle(surface, RED, (x, y), max(3, self.radius // 2), 2)
+            draw_text(surface, "!", SMALL_FONT, WHITE, x - 3, y - 10)
+        elif self.enemy_type == "boss":
+            pygame.draw.circle(surface, self.outline, (x, y), self.radius + 5, 2)
+            draw_text(surface, "★", SMALL_FONT, WHITE, x - 6, y - 10)
+
+class ItemDrop:
+    def __init__(self, x, y, item_type):
+        self.x = x
+        self.y = y
+        self.type = item_type
+        # 아이템이 경험치 구슬이나 배경에 묻히지 않도록 더 크게 표시한다.
+        self.radius = 15
+        self.spawn_time = pygame.time.get_ticks()
+
+    def apply(self, player):
+        now = pygame.time.get_ticks()
+
+        if self.type == "heal":
+            player.hp = min(player.max_hp, player.hp + 35)
+            return "구급상자로 체력 회복"
+        if self.type == "magnet":
+            player.magnet_boost_until = now + 4500
+            return "구조 신호기 작동"
+        if self.type == "freeze":
+            player.freeze_until = now + 3200
+            return "섬광탄 폭발! 좀비 일시정지"
+        return "보급품 획득"
+
+    def draw(self, surface):
+        if self.type == "heal":
+            color = RED
+            label = "+"
+            name = "구급"
+        elif self.type == "magnet":
+            color = CYAN
+            label = "S"
+            name = "신호"
+        elif self.type == "freeze":
+            color = BLUE
+            label = "!"
+            name = "섬광"
+        else:
+            color = WHITE
+            label = "?"
+            name = "보급"
+
+        x, y = int(self.x), int(self.y)
+        now = pygame.time.get_ticks()
+        pulse = 2 + int((math.sin(now / 130) + 1) * 2)
+
+        # 바깥 광원 + 진한 테두리 + 내부 아이콘으로 멀리서도 아이템임을 알 수 있게 한다.
+        pygame.draw.circle(surface, color, (x, y), self.radius + 8 + pulse, 2)
+        pygame.draw.circle(surface, BLACK, (x, y), self.radius + 3)
+        pygame.draw.circle(surface, color, (x, y), self.radius)
+        pygame.draw.circle(surface, WHITE, (x, y), self.radius, 2)
+        pygame.draw.rect(surface, WHITE, (x - 8, y - 8, 16, 16), 2, border_radius=3)
+        draw_text(surface, label, SMALL_FONT, WHITE, x - 5, y - 11)
+        draw_text(surface, name, SMALL_FONT, color, x - 16, y + 16)
+
+
+class LaserBeamEffect:
+    def __init__(self, start_x, start_y, end_x, end_y, color):
+        self.start_x = start_x
+        self.start_y = start_y
+        self.end_x = end_x
+        self.end_y = end_y
+        self.color = color
+        self.life = 12
+
+    def update(self):
+        self.life -= 1
+
+    def draw(self, surface):
+        if self.life <= 0:
+            return
+
+        # 끝 원 없이, 플레이어 몸에서 시작해 화면 끝까지 뻗는 완전한 직선 빔
+        pulse = 1 + (self.life % 3)
+        start = (int(self.start_x), int(self.start_y))
+        end = (int(self.end_x), int(self.end_y))
+        pygame.draw.line(surface, CYAN, start, end, 10 + pulse)
+        pygame.draw.line(surface, WHITE, start, end, 4)
+
+
+class ExplosionEffect:
+    def __init__(self, x, y, radius, color=ORANGE):
+        self.x = x
+        self.y = y
+        self.radius = radius
+        self.color = color
+        self.life = 16
+
+    def update(self):
+        self.life -= 1
+
+    def draw(self, surface):
+        if self.life <= 0:
+            return
+        r = int(self.radius * (1.1 - self.life / 24))
+        width = max(2, self.life // 4)
+        pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), max(8, r), width)
+        pygame.draw.circle(surface, YELLOW, (int(self.x), int(self.y)), max(4, r // 2), 1)
+
+
+class BossWarningEffect:
+    def __init__(self, x, y, radius, damage=0, warning_frames=48, impact_frames=14):
+        self.x = x
+        self.y = y
+        self.radius = radius
+        self.damage = damage
+        self.warning_frames = warning_frames
+        self.impact_frames = impact_frames
+        self.life = warning_frames + impact_frames
+        self.triggered = False
+
+    def update(self, player=None):
+        # 먼저 바닥 경고 표시를 충분히 보여준 뒤, 마지막 짧은 순간에만 실제 피해를 준다.
+        if not self.triggered and self.life <= self.impact_frames:
+            self.triggered = True
+            if self.damage > 0 and player is not None:
+                if distance(player.x, player.y, self.x, self.y) <= self.radius + player.radius:
+                    player.take_damage(self.damage)
+        self.life -= 1
+
+    def draw(self, surface):
+        if self.life <= 0:
+            return
+
+        center = (int(self.x), int(self.y))
+        if not self.triggered:
+            # 예고 단계: 붉은 위험 범위 + 안쪽으로 모이는 충전 원
+            progress = 1 - (self.life - self.impact_frames) / max(1, self.warning_frames)
+            progress = clamp(progress, 0, 1)
+            pygame.draw.circle(surface, RED, center, int(self.radius), 3)
+            pygame.draw.circle(surface, YELLOW, center, int(self.radius * progress), 2)
+            pygame.draw.line(surface, RED, (int(self.x - self.radius), int(self.y)), (int(self.x + self.radius), int(self.y)), 1)
+            pygame.draw.line(surface, RED, (int(self.x), int(self.y - self.radius)), (int(self.x), int(self.y + self.radius)), 1)
+            draw_text(surface, "위험!", SMALL_FONT, YELLOW, int(self.x), int(self.y - self.radius - 26), center=True)
+        else:
+            # 폭발 단계: 실제 공격이 터졌다는 것을 짧게 보여준다.
+            flash_radius = int(self.radius * (0.75 + 0.25 * self.life / max(1, self.impact_frames)))
+            pygame.draw.circle(surface, ORANGE, center, flash_radius, 5)
+            pygame.draw.circle(surface, YELLOW, center, max(8, flash_radius // 3), 2)
+
+
+class SlashEffect:
+    def __init__(self, x, y, radius, color):
+        self.x = x
+        self.y = y
+        self.radius = radius
+        self.color = color
+        self.life = 12
+
+    def update(self):
+        self.life -= 1
+
+    def draw(self, surface):
+        if self.life <= 0:
+            return
+        width = max(1, self.life // 3)
+        pygame.draw.circle(surface, self.color, (int(self.x), int(self.y)), self.radius, width)
+
+
+class FloatingText:
+    def __init__(self, text, x, y, color=WHITE):
+        self.text = text
+        self.x = x
+        self.y = y
+        self.color = color
+        self.life = 60
+
+    def update(self):
+        self.y -= 0.5
+        self.life -= 1
+
+    def draw(self, surface):
+        if self.life > 0:
+            draw_text(surface, self.text, SMALL_FONT, self.color, int(self.x), int(self.y))
+
+
+# -----------------------------
+# 게임 로직 함수
+# -----------------------------
+def auto_attack(player, enemies, bullets, effects):
+    now = pygame.time.get_ticks()
+
+    # 냉기 장치 패시브: 일정 주기마다 적 둔화/정지 효과
+    if player.freeze_skill and now - player.freeze_skill_last >= player.freeze_skill_delay:
+        player.freeze_until = now + 1300
+        player.freeze_skill_last = now
+
+    for weapon in player.weapons:
+        weapon.finish_reload_if_needed(now)
+
+        if not weapon.ready_to_fire(now):
+            continue
+
+        if weapon.kind == "ranged":
+            target = get_nearest_enemy(player.x, player.y, enemies)
+            if target is None:
+                continue
+
+            angle = math.atan2(target.y - player.y, target.x - player.x)
+
+            if weapon.id == "laser":
+                # 레이저는 투사체를 만들지 않고, 플레이어 위치에서 즉시 직선으로 발사한다.
+                end_x, end_y = get_line_end_from_player(player.x, player.y, angle)
+                beam_half_width = 7
+
+                final_level = get_final_weapon_level(weapon.id, weapon.level)
+                for enemy in enemies:
+                    hit_distance = distance_point_to_segment(
+                        enemy.x, enemy.y,
+                        player.x, player.y,
+                        end_x, end_y
+                    )
+                    if hit_distance <= enemy.radius + beam_half_width:
+                        if enemy.enemy_type in ("normal", "runner"):
+                            # 레이저는 일반 적과 날쌘 적을 한 번에 절단한다.
+                            enemy.take_damage(enemy.hp)
+                        else:
+                            enemy.take_damage(weapon.damage)
+                            if final_level is not None and final_level >= 1:
+                                # 최종 레이저는 빔 경로 위 적에게 추가 소각 피해
+                                enemy.take_damage(int(weapon.damage * 0.35))
+
+                effects.append(LaserBeamEffect(player.x, player.y, end_x, end_y, weapon.color))
+                weapon.last_used = now
+                continue
+
+            if weapon.ammo <= 0:
+                weapon.start_reload(now)
+                continue
+
+            pellet_count = getattr(weapon, "pellets", 1)
+            spread = getattr(weapon, "spread", 0)
+            for i in range(pellet_count):
+                if pellet_count == 1:
+                    shot_angle = angle
+                else:
+                    shot_angle = angle + spread * (i - (pellet_count - 1) / 2)
+                vx = math.cos(shot_angle) * weapon.bullet_speed
+                vy = math.sin(shot_angle) * weapon.bullet_speed
+
+                bullets.append(
+                    Bullet(
+                        player.x,
+                        player.y,
+                        vx,
+                        vy,
+                        weapon.damage,
+                        weapon.bullet_radius,
+                        weapon.color,
+                        weapon.pierce,
+                        weapon.name,
+                        getattr(weapon, "explosion_radius", 0),
+                    )
+                )
+
+            weapon.ammo -= 1
+            weapon.last_used = now
+
+            if weapon.ammo <= 0:
+                weapon.start_reload(now)
+
+        else:
+            # 근접 무기는 주변 범위 안의 모든 적을 자동 공격
+            attacked = False
+            for enemy in enemies:
+                if distance(player.x, player.y, enemy.x, enemy.y) <= weapon.range + enemy.radius:
+                    enemy.take_damage(weapon.damage)
+                    attacked = True
+
+            if attacked:
+                effects.append(SlashEffect(player.x, player.y, weapon.range, weapon.color))
+                if get_final_weapon_level(weapon.id, weapon.level) is not None:
+                    # 최종 근접 무기는 충격파로 한 번 더 광역 피해
+                    effects.append(ExplosionEffect(player.x, player.y, weapon.range + 28, weapon.color))
+                    for enemy in enemies:
+                        if distance(player.x, player.y, enemy.x, enemy.y) <= weapon.range + 35 + enemy.radius:
+                            enemy.take_damage(int(weapon.damage * 0.30))
+                weapon.last_used = now
+
+def handle_bullet_collisions(bullets, enemies):
+    for bullet in bullets[:]:
+        bullet.update()
+
+        if bullet.offscreen():
+            if bullet in bullets:
+                bullets.remove(bullet)
+            continue
+
+        for enemy in enemies[:]:
+            if enemy.id in bullet.hit_enemies:
+                continue
+
+            if distance(bullet.x, bullet.y, enemy.x, enemy.y) < bullet.radius + enemy.radius:
+                damage = bullet.damage
+                if bullet.weapon_name == "전설 저격소총" and getattr(enemy, "enemy_type", "") == "boss":
+                    damage = int(damage * 1.5)
+                enemy.take_damage(damage)
+                bullet.hit_enemies.add(enemy.id)
+
+                # 유탄발사기는 관통 무기가 아니라, 맞은 지점 주변 적에게 폭발 피해를 준다.
+                if bullet.explosion_radius > 0:
+                    for splash_enemy in enemies:
+                        if splash_enemy.id == enemy.id:
+                            continue
+                        if distance(enemy.x, enemy.y, splash_enemy.x, splash_enemy.y) <= bullet.explosion_radius + splash_enemy.radius:
+                            splash_enemy.take_damage(int(bullet.damage * 0.65))
+                    if bullet in bullets:
+                        bullets.remove(bullet)
+                    break
+
+                # 최종/SF급 탄환은 작은 추가 충격 피해를 준다.
+                if any(mark in bullet.weapon_name for mark in ["전설", "플라즈마", "차원", "오메가", "노바", "종말", "은하", "초신성", "가우스", "레일"]):
+                    bonus_radius = 50
+                    for splash_enemy in enemies:
+                        if splash_enemy.id != enemy.id and distance(enemy.x, enemy.y, splash_enemy.x, splash_enemy.y) <= bonus_radius + splash_enemy.radius:
+                            splash_enemy.take_damage(int(bullet.damage * 0.35))
+
+                bullet.pierce -= 1
+
+                if bullet.pierce <= 0 and bullet in bullets:
+                    bullets.remove(bullet)
+
+                break
+
+
+def remove_dead_enemies(enemies, orbs, items, floating_texts, wave):
+    kills = 0
+    boss_killed = False
+
+    for enemy in enemies[:]:
+        if enemy.hp <= 0:
+            if enemy.enemy_type == "boss":
+                boss_killed = True
+            orbs.append(ExpOrb(enemy.x, enemy.y, enemy.exp_amount, enemy.enemy_type))
+
+            # 아이템 드롭: 전체적으로 훨씬 드물게 나오게 조정.
+            # 방탄 조끼 강화 보급품(max_hp)은 제거했다.
+            drop_chance = 0.025
+            if enemy.enemy_type == "brute":
+                drop_chance = 0.04
+            elif enemy.enemy_type == "tank":
+                drop_chance = 0.045
+            elif enemy.enemy_type == "boss":
+                drop_chance = 0.28
+
+            if random.random() < drop_chance:
+                item_type = random.choices(
+                    ["heal", "magnet", "freeze"],
+                    weights=[45, 25, 30],
+                    k=1
+                )[0]
+                items.append(ItemDrop(enemy.x, enemy.y, item_type))
+
+            enemies.remove(enemy)
+            kills += 1
+
+    return kills, boss_killed
+
+
+def update_boss_patterns(enemies, player, effects):
+    """보스 전용 패턴: 경고 원 이후 근거리 충격파, 가끔 잡몹 호출."""
+    now = pygame.time.get_ticks()
+    for enemy in enemies:
+        if getattr(enemy, "enemy_type", None) != "boss":
+            continue
+        if not hasattr(enemy, "next_pattern_time"):
+            enemy.next_pattern_time = now + 1200
+        if now < enemy.next_pattern_time:
+            continue
+
+        pattern = random.choice(["shockwave", "shockwave", "shockwave", "summon", "rage"])
+        if pattern == "shockwave":
+            boss_day = get_chapter(enemy.wave if hasattr(enemy, "wave") else 1)
+            # 보스 범위공격은 Day 4 범위를 최대치로 고정한다.
+            # Day 1: 120, Day 2: 140, Day 3: 160, Day 4 이상: 180
+            radius = min(180, 100 + min(boss_day, 4) * 20)
+            # 후반 보스는 범위 대신 피해와 패턴 빈도로 압박한다.
+            damage_bonus = 14 + max(0, boss_day - 4) * 2
+            # 바로 피해를 주지 않고, 경고 원을 약 0.8초 보여준 뒤 터지게 한다.
+            effects.append(BossWarningEffect(enemy.x, enemy.y, radius, damage=enemy.damage + damage_bonus, warning_frames=54, impact_frames=14))
+        elif pattern == "summon":
+            for _ in range(6 + min(9, get_chapter(enemy.wave if hasattr(enemy, "wave") else 1))):
+                enemies.append(Enemy(max(1, getattr(enemy, "wave", 1))))
+        else:
+            # 광폭화: 짧은 시간 동안 보스가 더 빨라지고 단단해진다.
+            enemy.speed *= 1.12
+            enemy.damage += 2
+            effects.append(BossWarningEffect(enemy.x, enemy.y, 95, damage=0, warning_frames=26, impact_frames=8))
+
+        enemy.next_pattern_time = now + max(560, 2050 - get_chapter(getattr(enemy, "wave", 1)) * 180)
+
+
+def spawn_enemy_if_needed(enemies, wave, spawn_timer, boss_spawned_waves, dt):
+    spawn_timer += dt
+    day = get_chapter(wave)
+    # Day가 높아질수록 적 수가 약 10%씩 늘어나고, 생성 간격도 조금 빨라진다.
+    interval = max(190, int((955 - wave * 48) * (0.95 ** (day - 1))))
+    if day >= 6:
+        interval = int(interval * 1.12)
+
+    # 각 Day의 마지막 웨이브마다 보스 1회 소환
+    if wave % WAVES_PER_DAY == 0 and wave not in boss_spawned_waves:
+        enemies.append(Enemy(wave, forced_type="boss"))
+        boss_spawned_waves.add(wave)
+        return 0
+
+    # 적이 너무 많아지는 것 방지. Day마다 최대 적 수 +10% 느낌으로 증가.
+    max_enemies = min(118, int((25 + wave * 4) * (1 + 0.09 * (day - 1))))
+    if len(enemies) >= max_enemies:
+        return spawn_timer
+
+    if spawn_timer >= interval:
+        spawn_timer = 0
+        enemies.append(Enemy(wave))
+
+        # 후반부에는 가끔 2마리씩 등장
+        if wave >= 1 and random.random() < min(0.36, 0.20 + day * 0.024):
+            enemies.append(Enemy(wave))
+        if day >= 3 and random.random() < min(0.16, 0.04 + day * 0.018):
+            enemies.append(Enemy(wave))
+
+    return spawn_timer
+
+
+# -----------------------------
+# UI 화면
+# -----------------------------
+def draw_background(surface):
+    surface.fill(BLACK)
+
+    # 간단한 격자 배경
+    for x in range(0, WIDTH, 48):
+        pygame.draw.line(surface, (28, 28, 34), (x, 0), (x, HEIGHT))
+    for y in range(0, HEIGHT, 48):
+        pygame.draw.line(surface, (28, 28, 34), (0, y), (WIDTH, y))
+
+
+def get_chapter(wave):
+    # 4웨이브마다 다음 Day로 넘어감
+    return (wave - 1) // WAVES_PER_DAY + 1
+
+
+def get_day_wave(wave):
+    # 전체 누적 웨이브를 Day 안의 웨이브 1~4 표시로 변환
+    return (wave - 1) % WAVES_PER_DAY + 1
+
+
+def get_weapon_icon(weapon):
+    icons = {
+        "gun": "P", "rifle": "R", "shotgun": "S", "sniper": "N",
+        "sword": "M", "axe": "A", "bat": "B", "chainsaw": "C",
+        "flamethrower": "F", "minigun": "G", "grenade_launcher": "L", "laser": "★",
+    }
+    return icons.get(weapon.id, "?")
+
+
+def draw_ui(surface, player, wave, kills, next_wave_kills):
+    # HP
+    pygame.draw.rect(surface, GRAY, (20, 20, 230, 24))
+    hp_ratio = clamp(player.hp / player.max_hp, 0, 1)
+    pygame.draw.rect(surface, GREEN, (20, 20, int(230 * hp_ratio), 24))
+    draw_text(surface, f"체력 {player.hp}/{player.max_hp}", SMALL_FONT, WHITE, 26, 21)
+
+    # EXP
+    pygame.draw.rect(surface, GRAY, (20, 54, 230, 16))
+    exp_ratio = clamp(player.exp / player.exp_needed, 0, 1)
+    pygame.draw.rect(surface, PURPLE, (20, 54, int(230 * exp_ratio), 16))
+
+    chapter = get_chapter(wave)
+    draw_text(surface, f"Day {chapter}", FONT, YELLOW, 20, 78)
+    draw_text(surface, f"레벨 {player.level}", FONT, WHITE, 20, 106)
+    day_wave = get_day_wave(wave)
+    draw_text(surface, f"Wave {day_wave}/{WAVES_PER_DAY}", FONT, WHITE, 20, 134)
+    draw_text(surface, f"처치 {kills}", FONT, WHITE, 20, 162)
+    draw_text(surface, f"방탄조끼 피해감소 {player.armor}", SMALL_FONT, WHITE, 20, 190)
+
+    # 상태 효과
+    now = pygame.time.get_ticks()
+    status_y = 222
+    if now < player.magnet_boost_until:
+        draw_text(surface, "구조 신호기 작동 중", SMALL_FONT, CYAN, 20, status_y)
+        status_y += 22
+    if now < player.freeze_until:
+        draw_text(surface, "섬광탄 폭발! 좀비 일시정지 중", SMALL_FONT, BLUE, 20, status_y)
+        status_y += 22
+
+    # 무기 상태: 모든 보유 무기가 보이도록 짧고 촘촘하게 표시
+    panel_x = WIDTH - 350
+    panel_y = 18
+    draw_text(surface, "무기 상태", FONT, WHITE, panel_x, panel_y)
+
+    y = panel_y + 30
+    line_gap = 19
+    for weapon in player.weapons:
+        name = get_weapon_display_name(weapon)
+        if weapon.kind == "ranged":
+            if weapon.unlimited_ammo:
+                text = f"• {name} / 빔 {weapon.damage}"
+                color = CYAN
+            elif weapon.reload_end_time > now:
+                remain = max(0, (weapon.reload_end_time - now) / 1000)
+                text = f"• {name} / 장전 {remain:.1f}s"
+                color = YELLOW
+            else:
+                text = f"• {name} / 탄 {weapon.ammo}/{weapon.max_ammo}"
+                color = WHITE
+        else:
+            text = f"• {name} / 근접 {weapon.damage}"
+            color = WHITE
+
+        icon = get_weapon_icon(weapon)
+        pygame.draw.rect(surface, DARK_GRAY, (panel_x, y - 1, 20, 18), border_radius=4)
+        pygame.draw.rect(surface, color, (panel_x, y - 1, 20, 18), 1, border_radius=4)
+        draw_text(surface, icon, SMALL_FONT, color, panel_x + 5, y - 1)
+        draw_text(surface, text, SMALL_FONT, color, panel_x + 26, y)
+        y += line_gap
+
+    # 조작 안내
+    draw_text(surface, "이동: WASD/방향키 | 자동공격 | ESC: 종료", SMALL_FONT, WHITE, 20, HEIGHT - 30)
+
+
+def draw_selection_status(surface, player, wave, kills):
+    """선택 화면에서도 현재 상태를 한눈에 볼 수 있게 작게 표시한다."""
+    now = pygame.time.get_ticks()
+
+    # 왼쪽 상태
+    x = 24
+    y = 18
+    pygame.draw.rect(surface, (12, 12, 16), (x - 10, y - 10, 270, 145), border_radius=10)
+    pygame.draw.rect(surface, GRAY, (x - 10, y - 10, 270, 145), 2, border_radius=10)
+    draw_text(surface, f"Day {get_chapter(wave)}  Wave {get_day_wave(wave)}/{WAVES_PER_DAY}", SMALL_FONT, YELLOW, x, y)
+    draw_text(surface, f"체력 {player.hp}/{player.max_hp}", SMALL_FONT, WHITE, x, y + 24)
+    draw_text(surface, f"레벨 {player.level}  EXP {player.exp}/{player.exp_needed}", SMALL_FONT, WHITE, x, y + 48)
+    draw_text(surface, f"처치 {kills}", SMALL_FONT, WHITE, x, y + 72)
+    draw_text(surface, f"방탄조끼 피해감소 {player.armor}", SMALL_FONT, CYAN, x, y + 96)
+
+    # 오른쪽 무기 목록
+    panel_x = WIDTH - 345
+    panel_y = 18
+    pygame.draw.rect(surface, (12, 12, 16), (panel_x - 10, panel_y - 10, 330, 220), border_radius=10)
+    pygame.draw.rect(surface, GRAY, (panel_x - 10, panel_y - 10, 330, 220), 2, border_radius=10)
+    draw_text(surface, "현재 무기", SMALL_FONT, WHITE, panel_x, panel_y)
+    y = panel_y + 24
+    for weapon in player.weapons[:9]:
+        name = get_weapon_display_name(weapon)
+        icon = get_weapon_icon(weapon)
+        if weapon.kind == "ranged":
+            if weapon.unlimited_ammo:
+                text = f"{icon} {name} / 빔 {weapon.damage}"
+                color = CYAN
+            elif weapon.reload_end_time > now:
+                remain = max(0, (weapon.reload_end_time - now) / 1000)
+                text = f"{icon} {name} / 장전 {remain:.1f}s"
+                color = YELLOW
+            else:
+                text = f"{icon} {name} / 탄 {weapon.ammo}/{weapon.max_ammo}"
+                color = WHITE
+        else:
+            text = f"{icon} {name} / 근접 {weapon.damage}"
+            color = WHITE
+        draw_text(surface, text, SMALL_FONT, color, panel_x, y)
+        y += 20
+
+
+def boss_defeated_screen(surface, player, wave, kills):
+    """보스 처치 순간을 확실히 보여주는 짧은 알림 화면."""
+    start = pygame.time.get_ticks()
+    duration = 1100
+    while pygame.time.get_ticks() - start < duration:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pygame.quit(); sys.exit()
+
+        overlay = pygame.Surface((WIDTH, HEIGHT))
+        overlay.set_alpha(175)
+        overlay.fill((0, 0, 0))
+        surface.blit(overlay, (0, 0))
+        elapsed = pygame.time.get_ticks() - start
+        radius = 70 + elapsed // 8
+        pygame.draw.circle(surface, PURPLE, (WIDTH // 2, HEIGHT // 2 - 55), radius, 4)
+        pygame.draw.circle(surface, RED, (WIDTH // 2, HEIGHT // 2 - 55), max(25, radius // 2), 3)
+        draw_text(surface, "BOSS DEFEATED", TITLE_FONT, YELLOW, WIDTH // 2, HEIGHT // 2 - 70, center=True)
+        draw_text(surface, "보스를 처치했습니다!", FONT, WHITE, WIDTH // 2, HEIGHT // 2 + 5, center=True)
+        draw_text(surface, "다음 Day로 이동합니다", SMALL_FONT, CYAN, WIDTH // 2, HEIGHT // 2 + 42, center=True)
+        draw_selection_status(surface, player, wave, kills)
+        pygame.display.flip()
+        clock.tick(FPS)
+
+
+def apply_day_reward(player, reward_id, day):
+    if reward_id == "heal":
+        amount = int(player.max_hp * 0.45)
+        player.hp = min(player.max_hp, player.hp + amount)
+        return f"Day 보상: 체력 {amount} 회복"
+    if reward_id == "armor":
+        player.armor += 2
+        player.max_hp += 15
+        player.hp = min(player.max_hp, player.hp + 25)
+        return "Day 보상: 방탄 보강, 피해 감소 +2"
+    if reward_id == "exp":
+        bonus = DAY_BONUS_EXP_BASE + day * 80
+        player.exp += bonus
+        return f"Day 보상: 추가 경험치 +{bonus}"
+    if reward_id == "weapon":
+        if player.weapons:
+            weapon = random.choice(player.weapons)
+            result = weapon.upgrade()
+            player.evolution_flash_until = pygame.time.get_ticks() + 1200
+            return f"Day 보상: {result} 강화"
+    if reward_id == "speed":
+        player.speed += 0.35
+        return "Day 보상: 이동속도 +0.35"
+    return "Day 보상 획득"
+
+
+def day_reward_screen(surface, player, day, wave, kills):
+    rewards = [
+        {"id": "heal", "title": "응급 정비", "desc": "체력을 크게 회복합니다."},
+        {"id": "armor", "title": "방탄 보강", "desc": "피해 감소 +2, 최대 체력 +15"},
+        {"id": "exp", "title": "전투 기록 정리", "desc": "Day 보너스 경험치를 얻습니다."},
+        {"id": "weapon", "title": "무기 정비", "desc": "보유 무기 하나를 무작위로 강화합니다."},
+        {"id": "speed", "title": "기동 훈련", "desc": "이동 속도 +0.35"},
+    ]
+    choices = random.sample(rewards, 3)
+    buttons = []
+    while True:
+        overlay = pygame.Surface((WIDTH, HEIGHT))
+        overlay.set_alpha(225)
+        overlay.fill((0, 0, 0))
+        surface.blit(overlay, (0, 0))
+        draw_selection_status(surface, player, wave, kills)
+        draw_text(surface, f"Day {day - 1} 생존 보상", TITLE_FONT, YELLOW, WIDTH // 2, 95, center=True)
+        draw_text(surface, "다음 Day 전에 하나를 선택하세요", FONT, WHITE, WIDTH // 2, 150, center=True)
+        buttons.clear()
+        for i, choice in enumerate(choices):
+            rect = pygame.Rect(220, 220 + i * 105, 520, 76)
+            buttons.append((rect, choice))
+            pygame.draw.rect(surface, DARK_GRAY, rect, border_radius=10)
+            pygame.draw.rect(surface, CYAN, rect, 3, border_radius=10)
+            draw_text(surface, choice["title"], FONT, WHITE, rect.x + 24, rect.y + 12)
+            draw_text(surface, choice["desc"], SMALL_FONT, YELLOW, rect.x + 24, rect.y + 44)
+        pygame.display.flip()
+        clock.tick(FPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit(); sys.exit()
+                if event.key in [pygame.K_1, pygame.K_2, pygame.K_3]:
+                    idx = event.key - pygame.K_1
+                    if 0 <= idx < len(choices):
+                        return apply_day_reward(player, choices[idx]["id"], day)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                mx, my = pygame.mouse.get_pos()
+                for rect, choice in buttons:
+                    if rect.collidepoint(mx, my):
+                        return apply_day_reward(player, choice["id"], day)
+
+
+def level_up_screen(surface, player, chapter, wave, kills, next_wave_kills):
+    # 현재 챕터에서 해금된 선택지만 등장한다.
+    available_choices = [
+        choice for choice in UPGRADE_POOL
+        if choice.get("min_chapter", 1) <= chapter
+    ]
+    # 아직 얻지 못한 해금 무기를 우선 노출해서 모든 무기를 실제로 획득하기 쉽게 한다.
+    owned_weapon_ids = {weapon.id for weapon in player.weapons}
+    unowned_weapon_choices = [
+        choice for choice in available_choices
+        if choice.get("weapon_id") and choice["weapon_id"] not in owned_weapon_ids
+    ]
+    other_choices = [choice for choice in available_choices if choice not in unowned_weapon_choices]
+
+    choices = []
+    if unowned_weapon_choices:
+        choices.extend(random.sample(unowned_weapon_choices, min(3, len(unowned_weapon_choices))))
+
+    if len(choices) < 3:
+        fill_count = min(3 - len(choices), len(other_choices))
+        choices.extend(random.sample(other_choices, fill_count))
+
+    buttons = []
+
+    while True:
+        overlay = pygame.Surface((WIDTH, HEIGHT))
+        overlay.set_alpha(220)
+        overlay.fill((0, 0, 0))
+        surface.blit(overlay, (0, 0))
+        draw_selection_status(surface, player, wave, kills)
+
+        draw_text(surface, "레벨 업!", TITLE_FONT, WHITE, WIDTH // 2, 95, center=True)
+        draw_text(surface, "하나를 선택하세요", FONT, YELLOW, WIDTH // 2, 150, center=True)
+
+        buttons.clear()
+        for i, choice in enumerate(choices):
+            rect = pygame.Rect(220, 220 + i * 105, 520, 76)
+            buttons.append((rect, choice))
+
+            pygame.draw.rect(surface, DARK_GRAY, rect, border_radius=10)
+            pygame.draw.rect(surface, WHITE, rect, 3, border_radius=10)
+            if "weapon_id" in choice:
+                title = get_weapon_upgrade_title(player, choice["weapon_id"])
+            else:
+                title = get_support_upgrade_title(player, choice["id"]) or choice["title"]
+            draw_text(surface, title, FONT, WHITE, rect.x + 24, rect.y + 12)
+            draw_text(surface, get_upgrade_description(player, choice), SMALL_FONT, YELLOW, rect.x + 24, rect.y + 44)
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+
+                # 키보드 1, 2, 3으로도 선택 가능
+                if event.key in [pygame.K_1, pygame.K_2, pygame.K_3]:
+                    index = event.key - pygame.K_1
+                    if 0 <= index < len(choices):
+                        result = player.apply_upgrade(choices[index]["id"])
+                        return result
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                mx, my = pygame.mouse.get_pos()
+                for rect, choice in buttons:
+                    if rect.collidepoint(mx, my):
+                        result = player.apply_upgrade(choice["id"])
+                        return result
+
+
+def draw_start_screen(surface):
+    draw_background(surface)
+    draw_text(surface, "로그라이크 자동 슈팅", TITLE_FONT, WHITE, WIDTH // 2, 170, center=True)
+    draw_text(surface, "적을 피하면서 자동 공격으로 살아남는 게임", FONT, YELLOW, WIDTH // 2, 240, center=True)
+    draw_text(surface, "Enter: 시작", FONT, WHITE, WIDTH // 2, 325, center=True)
+    draw_text(surface, "이동: WASD/방향키 | 공격: 자동 | 레벨업: 선택지 클릭", SMALL_FONT, WHITE, WIDTH // 2, 375, center=True)
+    pygame.display.flip()
+
+
+def draw_game_over(surface, player, wave, kills):
+    chapter = get_chapter(wave)
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.set_alpha(220)
+    overlay.fill((0, 0, 0))
+    surface.blit(overlay, (0, 0))
+
+    draw_text(surface, "게임 오버", TITLE_FONT, RED, WIDTH // 2, HEIGHT // 2 - 110, center=True)
+    draw_text(surface, f"최종 레벨: {player.level}", FONT, WHITE, WIDTH // 2, HEIGHT // 2 - 52, center=True)
+    draw_text(surface, f"도달 Day: {chapter}", FONT, WHITE, WIDTH // 2, HEIGHT // 2 - 17, center=True)
+    draw_text(surface, f"도달 웨이브: Day {chapter} - Wave {get_day_wave(wave)}/{WAVES_PER_DAY}", FONT, WHITE, WIDTH // 2, HEIGHT // 2 + 18, center=True)
+    draw_text(surface, f"총 처치 수: {kills}", FONT, WHITE, WIDTH // 2, HEIGHT // 2 + 53, center=True)
+    draw_text(surface, "R: 다시 시작 | ESC: 종료", FONT, YELLOW, WIDTH // 2, HEIGHT // 2 + 100, center=True)
+
+
+# -----------------------------
+# 게임 초기화
+# -----------------------------
+def reset_game():
+    player = Player()
+    enemies = []
+    bullets = []
+    orbs = []
+    items = []
+    effects = []
+    floating_texts = []
+    wave = 1
+    chapter = get_chapter(wave)
+    kills = 0
+    next_wave_kills = 20
+    spawn_timer = 0
+    boss_spawned_waves = set()
+    message = "녹슨 권총으로 시작합니다"
+    message_until = pygame.time.get_ticks() + 2400
+
+    return {
+        "player": player,
+        "enemies": enemies,
+        "bullets": bullets,
+        "orbs": orbs,
+        "items": items,
+        "effects": effects,
+        "floating_texts": floating_texts,
+        "wave": wave,
+        "chapter": chapter,
+        "kills": kills,
+        "next_wave_kills": next_wave_kills,
+        "spawn_timer": spawn_timer,
+        "boss_spawned_waves": boss_spawned_waves,
+        "message": message,
+        "message_until": message_until,
+        "rest_end_time": 0,
+        "pending_day_message": "",
+        "state": "start",
+    }
+
+
+# -----------------------------
+# 메인 루프
+# -----------------------------
+def main():
+    game = reset_game()
+    running = True
+
+    while running:
+        dt = clock.tick(FPS)
+        now = pygame.time.get_ticks()
+
+        player = game["player"]
+        enemies = game["enemies"]
+        bullets = game["bullets"]
+        orbs = game["orbs"]
+        items = game["items"]
+        effects = game["effects"]
+        floating_texts = game["floating_texts"]
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+
+                if game["state"] == "start" and event.key == pygame.K_RETURN:
+                    game["state"] = "playing"
+
+                if game["state"] == "gameover" and event.key == pygame.K_r:
+                    game = reset_game()
+                    game["state"] = "playing"
+
+        if game["state"] == "start":
+            draw_start_screen(screen)
+            continue
+
+        if game["state"] == "playing":
+            keys = pygame.key.get_pressed()
+            player.move(keys)
+
+            # 적 생성
+            game["spawn_timer"] = spawn_enemy_if_needed(
+                enemies,
+                game["wave"],
+                game["spawn_timer"],
+                game["boss_spawned_waves"],
+                dt
+            )
+
+            # 자동 공격
+            auto_attack(player, enemies, bullets, effects)
+
+
+            # 총알 충돌
+            handle_bullet_collisions(bullets, enemies)
+
+            # 적 이동 및 플레이어 충돌
+            frozen = now < player.freeze_until
+            for enemy in enemies:
+                enemy.update(player, frozen=frozen)
+                if distance(player.x, player.y, enemy.x, enemy.y) < player.radius + enemy.radius:
+                    player.take_damage(enemy.damage)
+
+            update_boss_patterns(enemies, player, effects)
+
+            # 사망 적 제거 및 보상 생성
+            new_kills, boss_killed = remove_dead_enemies(enemies, orbs, items, floating_texts, game["wave"])
+            if new_kills > 0:
+                game["kills"] += new_kills
+
+            # Day 마지막 3웨이브에서는 보스를 잡으면 처치 수와 관계없이 바로 다음 Day로 넘어간다.
+            if boss_killed and get_day_wave(game["wave"]) == WAVES_PER_DAY:
+                game["kills"] = game["next_wave_kills"]
+                boss_defeated_screen(screen, player, game["wave"], game["kills"])
+                game["message"] = "보스 처치! 다음 Day로 이동합니다."
+                game["message_until"] = pygame.time.get_ticks() + 2600
+
+            # 웨이브 증가: 처치 수 기준
+            if game["kills"] >= game["next_wave_kills"]:
+                game["wave"] += 1
+                new_chapter = get_chapter(game["wave"])
+                game["next_wave_kills"] += 18 + game["wave"] * 5
+
+                if new_chapter > game["chapter"]:
+                    game["chapter"] = new_chapter
+
+                    heal_amount = int(player.max_hp * DAY_END_HEAL_RATIO)
+                    player.hp = min(player.max_hp, player.hp + heal_amount)
+                    bonus_exp = DAY_BONUS_EXP_BASE + game["chapter"] * 80
+                    player.exp += bonus_exp
+                    reward_message = day_reward_screen(screen, player, game["chapter"], game["wave"], game["kills"])
+                    game["message"] = f"Day {game['chapter']} 준비 시간! 체력 +{heal_amount}, EXP +{bonus_exp} / {reward_message}"
+
+                    # Day가 바뀔 때는 잠시 쉬는 시간을 준다.
+                    # 쉬는 시간 동안 남은 적과 총알을 정리하고, 적 생성/전투를 멈춘다.
+                    enemies.clear()
+                    bullets.clear()
+                    effects.clear()
+                    game["spawn_timer"] = 0
+                    game["rest_end_time"] = pygame.time.get_ticks() + REST_DURATION_MS
+                    game["pending_day_message"] = f"Day {game['chapter']} 시작! 좀비가 더 거세게 몰려옵니다."
+                    game["state"] = "rest"
+                    game["message_until"] = pygame.time.get_ticks() + REST_DURATION_MS
+                else:
+                    game["message"] = f"Wave {get_day_wave(game['wave'])}/{WAVES_PER_DAY} 시작! 좀비가 더 강하게 몰려옵니다."
+                    game["message_until"] = now + 2300
+
+            # 경험치 구슬 이동 및 획득
+            for orb in orbs[:]:
+                orb.update(player)
+                if distance(player.x, player.y, orb.x, orb.y) < player.radius + orb.radius:
+                    leveled = player.gain_exp(orb.amount)
+                    if orb in orbs:
+                        orbs.remove(orb)
+
+                    if leveled:
+                        result = level_up_screen(screen, player, game["chapter"], game["wave"], game["kills"], game["next_wave_kills"])
+
+                        game["message"] = result
+                        game["message_until"] = pygame.time.get_ticks() + 2800
+
+            # 보급품 획득
+            for item in items[:]:
+                if distance(player.x, player.y, item.x, item.y) < player.radius + item.radius:
+                    result = item.apply(player)
+                    game["message"] = result
+                    game["message_until"] = now + 2000
+                    if item in items:
+                        items.remove(item)
+
+            # 이펙트 업데이트
+            for effect in effects[:]:
+                try:
+                    effect.update(player)
+                except TypeError:
+                    effect.update()
+                if effect.life <= 0:
+                    effects.remove(effect)
+
+            # 떠오르는 텍스트 업데이트
+            for text in floating_texts[:]:
+                text.update()
+                if text.life <= 0:
+                    floating_texts.remove(text)
+
+            # 게임 오버
+            if player.hp <= 0:
+                game["state"] = "gameover"
+
+        elif game["state"] == "rest":
+            keys = pygame.key.get_pressed()
+            player.move(keys)
+
+            # 쉬는 시간에는 경험치 구슬과 아이템만 먹을 수 있다.
+            for orb in orbs[:]:
+                orb.update(player)
+                if distance(player.x, player.y, orb.x, orb.y) < player.radius + orb.radius:
+                    leveled = player.gain_exp(orb.amount)
+                    if orb in orbs:
+                        orbs.remove(orb)
+
+                    if leveled:
+                        result = level_up_screen(screen, player, game["chapter"], game["wave"], game["kills"], game["next_wave_kills"])
+                        game["message"] = result
+                        game["message_until"] = pygame.time.get_ticks() + 2800
+
+            for item in items[:]:
+                if distance(player.x, player.y, item.x, item.y) < player.radius + item.radius:
+                    result = item.apply(player)
+                    game["message"] = result
+                    game["message_until"] = now + 2000
+                    if item in items:
+                        items.remove(item)
+
+
+            for text in floating_texts[:]:
+                text.update()
+                if text.life <= 0:
+                    floating_texts.remove(text)
+
+            if now >= game["rest_end_time"]:
+                game["state"] = "playing"
+                game["message"] = game["pending_day_message"]
+                game["message_until"] = now + 2300
+
+        # -----------------------------
+        # 그리기
+        # -----------------------------
+        draw_background(screen)
+
+        # 캐릭터 주변 자석 범위 원은 숨김 처리했다.
+
+        for orb in orbs:
+            orb.draw(screen)
+
+        for item in items:
+            item.draw(screen)
+
+        for bullet in bullets:
+            bullet.draw(screen)
+
+        for enemy in enemies:
+            enemy.draw(screen)
+
+        for effect in effects:
+            effect.draw(screen)
+
+
+        player.draw(screen)
+
+        for text in floating_texts:
+            text.draw(screen)
+
+        draw_ui(screen, player, game["wave"], game["kills"], game["next_wave_kills"])
+
+        if game["state"] == "rest":
+            remaining = max(0, math.ceil((game["rest_end_time"] - now) / 1000))
+            overlay = pygame.Surface((WIDTH, HEIGHT))
+            overlay.set_alpha(95)
+            overlay.fill((0, 0, 0))
+            screen.blit(overlay, (0, 0))
+            draw_text(screen, f"Day {game['chapter']} 준비 시간", TITLE_FONT, YELLOW, WIDTH // 2, HEIGHT // 2 - 50, center=True)
+            draw_text(screen, f"{remaining}초 뒤 다음 Day 시작", FONT, WHITE, WIDTH // 2, HEIGHT // 2 + 10, center=True)
+            draw_text(screen, "이동하면서 경험치와 아이템을 주울 수 있습니다", SMALL_FONT, CYAN, WIDTH // 2, HEIGHT // 2 + 48, center=True)
+            draw_text(screen, "Day 종료 보상과 자동 회복/경험치 보너스가 적용되었습니다", SMALL_FONT, YELLOW, WIDTH // 2, HEIGHT // 2 + 76, center=True)
+
+        if now < game["message_until"]:
+            draw_text(screen, game["message"], FONT, YELLOW, WIDTH // 2, 22, center=True)
+
+        if game["state"] == "gameover":
+            draw_game_over(screen, player, game["wave"], game["kills"])
+
+        pygame.display.flip()
+
+    pygame.quit()
+    sys.exit()
+
+
+if __name__ == "__main__":
+    main()
